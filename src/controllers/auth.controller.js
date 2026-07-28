@@ -8,6 +8,7 @@ const allowedFields = require("../helpers/validation");
 
 const { User, EmailVerificationToken } = require("../models");
 const { sendVerificationEmail } = require("../services/email.service");
+const refreshEmailVerificationToken = require("../services/refreshEmailverificationtoken.service");
 
 const registerSchema = z
   .object({
@@ -34,7 +35,12 @@ const loginSchema = z.object({
   password: z.string({ error: "password is required." }).min(1, "password is required."),
 });
 
+const emailVerificationSchema = z.object({
+  email: z.string({ error: "email is required." }).trim().email("Please provide a valid email address."),
+});
+
 const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000;
+const TWO_MINUTES_IN_MS = 2 * 60 * 1000;
 
 
 
@@ -86,16 +92,11 @@ async function register(req, res) {
       status: "inactive",
     });
 
-    await EmailVerificationToken.destroy({ where: { userId: user.id } });
+    
 
-    const rawToken = crypto.randomBytes(32).toString("hex");
-    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const {rawToken} = await refreshEmailVerificationToken(user.id, TWO_MINUTES_IN_MS) // For creating token for email verification
 
-    await EmailVerificationToken.create({
-      userId: user.id,
-      tokenHash,
-      expiresAt: new Date(Date.now() + ONE_DAY_IN_MS),
-    });
+    // return res.send(rawToken);
 
     await sendVerificationEmail({
       email: user.email,
@@ -273,4 +274,69 @@ function home(req, res) {
   });
 }
 
-module.exports = { register, login, home, verifyEmail };
+async function resendVerificationEmail(req, res){
+
+  const { email } = req.body;
+
+  try{
+    const parsedEmail = emailVerificationSchema.safeParse({email});
+  
+    if (!parsedEmail.success) {
+      return res.status(400).json({
+        status: false,
+        message: "Validation failed.",
+        errors: parsedEmail.error.issues,
+      });
+    }
+  
+    const user = await User.findOne({where: {email}});
+
+    if(!user){
+      return res.status(404).json({
+        status: false,
+        message: "User not found"
+      });
+    }
+
+    // return res.send(user);
+    const {id, status, emailVerifiedAt, firstName} = user;
+
+    if(status === "active"){
+      return res.status(409).json({
+        status: false,
+        message: "Email is already verified."
+      });
+    }
+
+    const hasToken = await EmailVerificationToken.findOne({where: {userId : id}});
+
+    // return res.send(hasToken);
+
+    // console.log(hasToken);
+
+    // return;
+
+
+    if(hasToken){
+
+      const {rawToken} = await refreshEmailVerificationToken(id, TWO_MINUTES_IN_MS) // For creating token for email verification
+
+      await sendVerificationEmail({
+        email,
+        firstName,
+        token: rawToken,
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: "Email verification link sent succesfully",
+      });
+    }
+  }catch(error){
+    console.error("Some Error Occured: "+ error);
+  }
+
+
+
+}
+module.exports = { register, login, home, verifyEmail, resendVerificationEmail };
