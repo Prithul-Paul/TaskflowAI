@@ -1,5 +1,5 @@
 const crypto = require("crypto");
-const { EmailVerificationToken } = require("../models");
+const { EmailVerificationToken } = require("../../models/auth");
 
 async function refreshEmailVerificationToken(userId, expiry){
     await EmailVerificationToken.destroy({ where: { userId } });

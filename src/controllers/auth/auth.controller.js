@@ -4,25 +4,41 @@ const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 
 
-const allowedFields = require("../helpers/validation");
+const allowedFields = require("../../helpers/validation");
 
-const { User, EmailVerificationToken } = require("../models");
-const { sendVerificationEmail } = require("../services/email.service");
-const refreshEmailVerificationToken = require("../services/refreshEmailverificationtoken.service");
+const { User, EmailVerificationToken, PasswordResetToken, PasswordHistory } = require("../../models/auth");
+const { sendVerificationEmail, sendPasswordResetEmail, sendPasswordResetConfirmationEmail } = require("../../services/email.service");
+const refreshEmailVerificationToken = require("../../services/auth/refreshEmailverificationtoken.service");
+// const requestPasswordReset = require("../services/requestPasswordReset.service");
+const { type } = require("os");
+const refreshPasswordResetToken = require("../../services/auth/refreshPasswordResetToken.service");
+
+const passwordSchema = z
+  .string({ error: "password is required." })
+  .trim()
+  .max(20)
+  .regex(/[A-Z]/, "Must contain an uppercase letter")
+  .regex(/[a-z]/, "Must contain a lowercase letter")
+  .regex(/[0-9]/, "Must contain a number")
+  .regex(/[^A-Za-z0-9]/, "Must contain a special character");
 
 const registerSchema = z
   .object({
     first_name: z.string({ error: "first_name is required." }).trim().min(3).max(10),
     last_name: z.string({ error: "last_name is required." }).trim().min(3).max(10),
     email: z.string({ error: "email is required." }).trim().email(),
-    password: z
-      .string({ error: "password is required." })
-      .trim()
-      .max(20)
-      .regex(/[A-Z]/, "Must contain an uppercase letter")
-      .regex(/[a-z]/, "Must contain a lowercase letter")
-      .regex(/[0-9]/, "Must contain a number")
-      .regex(/[^A-Za-z0-9]/, "Must contain a special character"),
+    password: passwordSchema,
+    cpassword: z.string({ error: "cpassword is required." }),
+  })
+  .refine((data) => data.password === data.cpassword, {
+    error: "Passwords don't match!",
+    path: ["cpassword"],
+  });
+
+const resetPasswordSchema = z
+  .object({
+    token: z.string({ error: "token is required." }).trim().min(1, "token is required."),
+    password: passwordSchema,
     cpassword: z.string({ error: "cpassword is required." }),
   })
   .refine((data) => data.password === data.cpassword, {
@@ -41,6 +57,7 @@ const emailVerificationSchema = z.object({
 
 const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000;
 const TWO_MINUTES_IN_MS = 2 * 60 * 1000;
+const FIFTEEN_MINUTES_IN_MS = 15 * 60 * 1000;
 
 
 
@@ -90,6 +107,11 @@ async function register(req, res) {
       email: validatedUser.email,
       passwordHash: hashedPassword,
       status: "inactive",
+    });
+
+    await PasswordHistory.create({
+      userId: user.id,
+      passwordHash: hashedPassword,
     });
 
     
@@ -220,8 +242,9 @@ async function login(req, res) {
 
     if (user.status === "inactive") {
       return res.status(403).json({
+        type: "inactive",
         status: false,
-        message: "Please verify your email before logging in.",
+        message: "Please verify your email before logging in."
       });
     }
 
@@ -274,6 +297,27 @@ function home(req, res) {
   });
 }
 
+function logout(req, res) {
+  try {
+    res.clearCookie("auth_token", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+    });
+
+    return res.status(200).json({
+      status: true,
+      message: "Logout successful.",
+    });
+  } catch (error) {
+    console.error("Logout error:", error);
+    return res.status(500).json({
+      status: false,
+      message: "Unable to log out.",
+    });
+  }
+}
+
 async function resendVerificationEmail(req, res){
 
   const { email } = req.body;
@@ -308,35 +352,186 @@ async function resendVerificationEmail(req, res){
       });
     }
 
-    const hasToken = await EmailVerificationToken.findOne({where: {userId : id}});
+    const {rawToken} = await refreshEmailVerificationToken(id, TWO_MINUTES_IN_MS) // For creating token for email verification
 
-    // return res.send(hasToken);
+    await sendVerificationEmail({
+      email,
+      firstName,
+      token: rawToken,
+    });
 
-    // console.log(hasToken);
-
-    // return;
-
-
-    if(hasToken){
-
-      const {rawToken} = await refreshEmailVerificationToken(id, TWO_MINUTES_IN_MS) // For creating token for email verification
-
-      await sendVerificationEmail({
-        email,
-        firstName,
-        token: rawToken,
-      });
-
-      return res.status(201).json({
-        success: true,
-        message: "Email verification link sent succesfully",
-      });
-    }
+    return res.status(201).json({
+      success: true,
+      message: "Email verification link sent succesfully",
+    });
   }catch(error){
     console.error("Some Error Occured: "+ error);
+    return res.status(500).json({
+      status: false,
+      message: "Unable to resend verification email.",
+    });
   }
 
 
 
 }
-module.exports = { register, login, home, verifyEmail, resendVerificationEmail };
+
+async function forgotPassword(req, res) {
+  const { email } = req.body || {};
+
+  try {
+    const parsedEmail = emailVerificationSchema.safeParse({ email });
+
+    if (!parsedEmail.success) {
+      return res.status(400).json({
+        status: false,
+        message: "Validation failed.",
+        errors: parsedEmail.error.issues,
+      });
+    }
+    const validatedEmail = parsedEmail.data;
+
+    // await requestPasswordReset(parsedEmail.data.email);
+    const user = await User.findOne({ where: { email: validatedEmail.email } });
+    
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: "If an account with that email exists, a password reset link has been sent.",
+      });
+    }
+  
+    const { rawToken } = await refreshPasswordResetToken(user.id, FIFTEEN_MINUTES_IN_MS);
+  
+    await sendPasswordResetEmail({
+      email: user.email,
+      firstName: user.firstName,
+      token: rawToken,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "If an account with that email exists, a password reset link has been sent.",
+    });
+  } catch (error) {
+    console.error("Password reset request error:", error);
+    return res.status(500).json({
+      status: false,
+      message: "Unable to process password reset request.",
+    });
+  }
+}
+
+async function resetPassword(req, res) {
+  const { token, password, cpassword } = req.body || {};
+  const unexpectedFields = allowedFields(req, ["token", "password", "cpassword"]);
+
+  if (unexpectedFields.length > 0) {
+    return res.status(400).json({
+      status: false,
+      message: "Only token, password, and cpassword are allowed.",
+      errors: unexpectedFields.map((field) => ({
+        path: [field],
+        message: "This field is not allowed.",
+      })),
+    });
+  }
+
+  try {
+    const parsedResetPassword = resetPasswordSchema.safeParse({ token, password, cpassword });
+
+    if (!parsedResetPassword.success) {
+      return res.status(400).json({
+        status: false,
+        message: "Validation failed.",
+        errors: parsedResetPassword.error.issues,
+      });
+    }
+
+    const validatedResetPassword = parsedResetPassword.data;
+    const tokenHash = crypto.createHash("sha256").update(validatedResetPassword.token).digest("hex");
+    const passwordResetToken = await PasswordResetToken.findOne({ where: { tokenHash } });
+
+    if (!passwordResetToken) {
+      return res.status(404).json({
+        status: false,
+        message: "Invalid Token",
+      });
+    }
+
+    if (passwordResetToken.expiresAt <= new Date()) {
+      await passwordResetToken.destroy();
+      return res.status(400).json({
+        status: false,
+        message: "Token has expired already. Please regenerate a new token",
+      });
+    }
+
+    const user = await passwordResetToken.getUser();
+
+    if (!user) {
+      await passwordResetToken.destroy();
+      return res.status(404).json({
+        status: false,
+        message: "Something went wrong",
+      });
+    }
+
+    const passwordHistoryEntries = await user.getPasswordHistories({
+      order: [["createdAt", "ASC"]],
+    });
+
+    if (passwordHistoryEntries.length >= 5) {
+      const oldestPasswordHistory = passwordHistoryEntries[0];
+      await oldestPasswordHistory.destroy();
+    }
+
+
+    const histories = await user.getPasswordHistories({ order: [["createdAt", "ASC"]] });
+
+    const isPasswordUsedBefore = await Promise.all(
+      histories.map(async (entry) => {
+        return bcrypt.compare(validatedResetPassword.password, entry.passwordHash);
+      })
+    );
+
+
+    if (isPasswordUsedBefore.some(Boolean)) {
+      return res.status(400).json({
+        status: false,
+        message: "You have used this password before. Please use different password",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(validatedResetPassword.password, 10);
+
+    await PasswordHistory.create({
+      userId: user.id,
+      passwordHash: hashedPassword,
+    });
+
+    await user.update({
+      passwordHash: hashedPassword,
+      lastPasswordResetAt: new Date(),
+    });
+    await passwordResetToken.destroy();
+
+    await sendPasswordResetConfirmationEmail({
+      email: user.email,
+      firstName: user.firstName,
+    });
+
+    return res.status(200).json({
+      status: true,
+      message: "Password has been reset successfully.",
+    });
+  } catch (error) {
+    console.error("Password reset error:", error);
+    return res.status(500).json({
+      status: false,
+      message: "Unable to reset password.",
+    });
+  }
+}
+
+module.exports = { register, login, logout, home, verifyEmail, resendVerificationEmail, forgotPassword, resetPassword };

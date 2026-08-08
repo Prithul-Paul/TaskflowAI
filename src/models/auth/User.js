@@ -1,6 +1,6 @@
 const { DataTypes } = require("sequelize");
 
-const sequelize = require("../db.js");
+const sequelize = require("../../db.js");
 
 
 const User = sequelize.define(
@@ -56,6 +56,11 @@ const User = sequelize.define(
     },
 
     lastLoginAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+
+    lastPasswordResetAt: {
       type: DataTypes.DATE,
       allowNull: true,
     },

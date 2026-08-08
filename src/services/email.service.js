@@ -11,6 +11,9 @@ function createTransporter() {
     host: SMTP_HOST,
     port: Number(SMTP_PORT),
     secure: Number(SMTP_PORT) === 465,
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 20000,
     auth: {
       user: SMTP_USER,
       pass: SMTP_PASSWORD,
@@ -19,8 +22,8 @@ function createTransporter() {
 }
 
 async function sendVerificationEmail({ email, firstName, token }) {
-  const appUrl = (process.env.APP_URL || "http://localhost:3000").replace(/\/$/, "");
-  const verificationUrl = `${appUrl}/v1/api/auth/verify-email?token=${encodeURIComponent(token)}`;
+  // const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
+  const verificationUrl = `${process.env.FRONTEND_URL}/verifyemail?token=${encodeURIComponent(token)}`;
 
   await createTransporter().sendMail({
     from: process.env.MAIL_FROM || process.env.SMTP_USER,
@@ -30,4 +33,24 @@ async function sendVerificationEmail({ email, firstName, token }) {
   });
 }
 
-module.exports = { sendVerificationEmail };
+async function sendPasswordResetEmail({ email, firstName, token }) {
+  const resetPasswordUrl = `${process.env.FRONTEND_URL}/reset-password?token=${encodeURIComponent(token)}`;
+
+  await createTransporter().sendMail({
+    from: process.env.MAIL_FROM || process.env.SMTP_USER,
+    to: email,
+    subject: "Reset your Password",
+    text: `Hello ${firstName},\n\nPlease click the link below to reset your password.\n\n${resetPasswordUrl}\n\nThis link expires in 15 minutes.\n\nRegards,\nTeam`,
+  });
+}
+
+async function sendPasswordResetConfirmationEmail({ email, firstName }) {
+  await createTransporter().sendMail({
+    from: process.env.MAIL_FROM || process.env.SMTP_USER,
+    to: email,
+    subject: "Your Password Has Been Reset",
+    text: `Hello ${firstName},\n\nYour password was successfully reset.\n\nIf you did not make this change, please contact support immediately.\n\nRegards,\nTeam`,
+  });
+}
+
+module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendPasswordResetConfirmationEmail };

@@ -1,6 +1,6 @@
 const { DataTypes } = require("sequelize");
 
-const sequelize = require("../db");
+const sequelize = require("../../db");
 
 const EmailVerificationToken = sequelize.define(
   "EmailVerificationToken",
