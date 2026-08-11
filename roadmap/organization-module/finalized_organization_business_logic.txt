@@ -1,0 +1,731 @@
+FINALIZED ORGANIZATION MODULE — BUSINESS LOGIC
+
+Project: Multi-tenant SaaS collaboration/project-management application
+Status: Finalized business logic
+Source: Agreed requirements from project discussion
+
+============================================================
+1. PURPOSE
+============================================================
+
+An Organization represents a company/workspace/tenant in the application.
+
+Example:
+
+Acme Technologies
+|
++-- Members
++-- Teams
++-- Projects
+      +-- Tasks
+
+The Organization is also the boundary for multi-tenant data
+isolation.
+
+A user belonging to Organization A must not be able to access
+Organization B's organization-specific resources.
+
+============================================================
+2. USER ↔ ORGANIZATION RELATIONSHIP
+============================================================
+
+A user can belong to multiple organizations.
+
+Therefore, users will NOT have a single organization_id field
+used to represent organization membership.
+
+Instead, a membership/join table is used:
+
+users
+   |
+   v
+organization_members
+   ^
+   |
+organizations
+
+This creates a many-to-many relationship between users and
+organizations.
+
+Example:
+
+users
+--------------------------------
+id    name
+1     John
+2     Alice
+3     Bob
+
+organizations
+--------------------------------
+id    name
+10    Acme Technologies
+20    XYZ Corporation
+
+organization_members
+-----------------------------------------
+id    organization_id    user_id    role
+1     10                  1          owner
+2     10                  2          admin
+3     10                  3          member
+4     20                  1          owner
+
+Therefore, John can belong to both Organization 10 and
+Organization 20.
+
+============================================================
+3. ORGANIZATION MODEL
+============================================================
+
+The agreed initial organization fields are:
+
+organizations
+-------------------------
+id
+name
+slug
+description
+logo_url
+status
+created_at
+updated_at
+
+Required:
+- name
+
+Useful:
+- slug
+- status
+
+Optional:
+- description
+- logo_url
+
+No additional organization fields should be added unnecessarily.
+
+============================================================
+4. ORGANIZATION MEMBERSHIP MODEL
+============================================================
+
+organization_members
+-------------------------
+id
+organization_id
+user_id
+role
+created_at
+updated_at
+
+The relationship is:
+
+User <----> Organization
+          |
+          v
+organization_members
+
+Important database constraint:
+
+The combination of:
+
+user_id + organization_id
+
+must be unique.
+
+This prevents the same user from having duplicate membership
+records in the same organization.
+
+============================================================
+5. ORGANIZATION ROLES
+============================================================
+
+Initial roles:
+
+OWNER
+ADMIN
+MEMBER
+
+Main business requirement:
+
+Only the OWNER can modify organization-level entities/settings.
+
+Initial permissions:
+
+Operation                         Owner   Admin   Member
+---------------------------------------------------------
+View organization                  Yes     Yes     Yes
+Update organization                Yes     No      No
+Delete organization                Yes     No      No
+View members                       Yes     Yes     Yes
+Change member role                 Yes     No      No
+Remove member                      Yes     No      No
+
+The exact permissions for Teams and Projects will be decided
+when those modules are implemented.
+
+============================================================
+6. CREATE ORGANIZATION
+============================================================
+
+Endpoint:
+
+POST /api/v1/organizations
+
+Request:
+
+{
+  "name": "Acme Technologies"
+}
+
+The frontend must NOT provide userId.
+
+The authenticated user's ID comes from:
+
+req.user.id
+
+Complete flow:
+
+Authenticated user
+      |
+      v
+Validate organization data
+      |
+      v
+Create organization
+      |
+      v
+Create organization_members record
+      |
+      +-- user_id = authenticated user
+      +-- organization_id = newly created organization
+      +-- role = OWNER
+      |
+      v
+Return successful response
+
+The user who creates the organization automatically becomes
+the OWNER.
+
+============================================================
+7. ORGANIZATION CREATION MUST BE TRANSACTIONAL
+============================================================
+
+Organization creation consists of two related database
+operations:
+
+1. Create Organization
+2. Create Owner Membership
+
+These operations must happen inside one database transaction.
+
+Successful case:
+
+Create Organization
+       |
+       v
+Create Owner Membership
+       |
+       v
+COMMIT
+
+Failure case:
+
+Create Organization
+       |
+       v
+Create Membership fails
+       |
+       v
+ROLLBACK
+
+The organization must not be left behind without its owner
+membership.
+
+============================================================
+8. AUTHENTICATION VS AUTHORIZATION
+============================================================
+
+Authentication answers:
+
+"Who is the user?"
+
+Handled by the existing authentication middleware.
+
+JWT
+ |
+ v
+authenticateUser
+ |
+ v
+req.user
+
+Authorization answers:
+
+"What is the user allowed to do?"
+
+Handled through organization membership and role.
+
+req.user
+   |
+   v
+organization_members
+   |
+   v
+role
+   |
+   v
+permission
+
+============================================================
+9. requireOrganizationRole(...)
+============================================================
+
+A generic organization-role middleware will be used instead of
+separate middleware such as:
+
+isOwner
+isAdmin
+isMember
+
+Usage:
+
+requireOrganizationRole("owner")
+
+or:
+
+requireOrganizationRole(["owner", "admin"])
+
+Conceptual logic:
+
+Request
+   |
+   v
+Get authenticated user ID
+   |
+   v
+Get organization ID
+   |
+   v
+Find organization_members record
+   |
+   v
+Membership exists?
+   |
+   +-- NO --> 403
+   |
+   +-- YES
+         |
+         v
+      Check role
+         |
+         +-- Not allowed --> 403
+         |
+         +-- Allowed --> next()
+
+The middleware may attach the membership to:
+
+req.organizationMembership
+
+so the controller does not need to query it again.
+
+============================================================
+10. AUTHORIZATION MUST BE BACKEND CONTROLLED
+============================================================
+
+The frontend must never be trusted to determine the user's
+organization role.
+
+The backend must determine the role from:
+
+JWT
+ |
+ v
+req.user.id
+ |
+ v
+organization_members
+ |
+ v
+role
+
+The frontend may use role information to control UI visibility,
+but backend authorization is the actual security boundary.
+
+============================================================
+11. HTTP AUTHORIZATION RULES
+============================================================
+
+401 Unauthorized:
+
+Used when the user is not properly authenticated.
+
+Examples:
+- No JWT
+- Invalid JWT
+- Expired JWT
+
+403 Forbidden:
+
+Used when the user is authenticated but does not have permission.
+
+Example:
+
+User is logged in
+      |
+      v
+User belongs to organization
+      |
+      v
+User role = MEMBER
+      |
+      v
+Operation requires OWNER
+      |
+      v
+403 Forbidden
+
+============================================================
+12. PLANNED ORGANIZATION APIs
+============================================================
+
+Organization APIs:
+
+POST   /api/v1/organizations
+GET    /api/v1/organizations/:organizationId
+PATCH  /api/v1/organizations/:organizationId
+DELETE /api/v1/organizations/:organizationId
+
+Membership APIs:
+
+GET    /api/v1/organizations/:organizationId/members
+PATCH  /api/v1/organizations/:organizationId/members/:userId
+DELETE /api/v1/organizations/:organizationId/members/:userId
+
+Authentication and appropriate authorization middleware will be
+applied to these endpoints.
+
+============================================================
+13. ORGANIZATION ACCESS RULE
+============================================================
+
+For any organization-specific request, the backend must
+establish that the authenticated user has access to that
+organization.
+
+Conceptually:
+
+Request
+  |
+  v
+JWT identifies User A
+  |
+  v
+Request specifies Organization 10
+  |
+  v
+Check organization_members
+  |
+  v
+Does User A belong to Organization 10?
+
+If the user does not belong to the organization, access must
+be denied.
+
+This rule is required for tenant isolation.
+
+============================================================
+14. ORGANIZATION UPDATE
+============================================================
+
+Only the OWNER can update organization-level information.
+
+Example:
+
+PATCH /api/v1/organizations/10
+
+The backend verifies:
+
+Authenticated?
+     |
+     v
+Member of organization?
+     |
+     v
+Role = OWNER?
+     |
+     v
+Allow update
+
+Admin and Member cannot perform organization-level updates
+under the current rules.
+
+============================================================
+15. ORGANIZATION DELETION
+============================================================
+
+Only the OWNER can delete the organization under the current
+rules.
+
+Authorization flow:
+
+Authenticated user
+       |
+       v
+Organization membership
+       |
+       v
+Role = OWNER
+       |
+       v
+Allow deletion
+
+Admin and Member cannot perform this operation.
+
+The exact deletion/cleanup strategy for related future entities
+has not been finalized and should not be assumed as part of
+this module's business logic.
+
+============================================================
+16. MEMBER MANAGEMENT
+============================================================
+
+Organization members are represented through:
+
+organization_members
+
+Available roles:
+
+OWNER
+ADMIN
+MEMBER
+
+Current rules:
+
+View members:
+- OWNER: allowed
+- ADMIN: allowed
+- MEMBER: allowed
+
+Change member role:
+- OWNER: allowed
+- ADMIN: not allowed
+- MEMBER: not allowed
+
+Remove member:
+- OWNER: allowed
+- ADMIN: not allowed
+- MEMBER: not allowed
+
+============================================================
+17. FRONTEND FLOW
+============================================================
+
+Initial frontend organization flow:
+
+Login
+  |
+  v
+Organization Setup
+  |
+  v
+Create Organization
+  |
+  v
+Organization Dashboard
+  |
+  +-- Organization Settings
+  |
+  +-- Members
+  |
+  +-- Role Management
+
+Frontend role restrictions are only for user experience.
+Backend authorization independently enforces permissions.
+
+============================================================
+18. EDGE CASES
+============================================================
+
+CASE 1 — Unauthenticated user creates organization
+
+No valid JWT
+     |
+     v
+401 Unauthorized
+
+CASE 2 — Authenticated user creates organization
+
+Create organization
+     |
+     v
+Create membership
+     |
+     v
+role = OWNER
+
+CASE 3 — Duplicate membership
+
+The unique:
+
+user_id + organization_id
+
+constraint prevents duplicate membership records.
+
+CASE 4 — User accesses organization they don't belong to
+
+No organization membership
+     |
+     v
+Access denied
+
+CASE 5 — MEMBER attempts OWNER-only operation
+
+role = MEMBER
+     |
+     v
+required = OWNER
+     |
+     v
+403 Forbidden
+
+CASE 6 — ADMIN attempts OWNER-only operation
+
+role = ADMIN
+     |
+     v
+required = OWNER
+     |
+     v
+403 Forbidden
+
+CASE 7 — OWNER performs OWNER-only operation
+
+role = OWNER
+     |
+     v
+Permission granted
+     |
+     v
+next()
+     |
+     v
+Controller
+
+CASE 8 — Organization creation succeeds but membership creation
+fails
+
+Transaction rolls back the organization creation.
+
+============================================================
+19. NOT PART OF THE CURRENT ORGANIZATION MODULE
+============================================================
+
+The following are deliberately not part of the current module:
+
+- Invitations
+- Teams
+- Projects
+- Tasks
+- Comments
+- Notifications
+- AI features
+- Redis
+- Docker
+- CI/CD
+- Socket.IO
+
+They are future modules/features.
+
+The next major module after Organization is Invitation.
+
+============================================================
+20. FINAL ORGANIZATION FLOW
+============================================================
+
+                    USER
+                     |
+                     | authenticated
+                     v
+              CREATE ORGANIZATION
+                     |
+                     v
+              ORGANIZATIONS
+                     |
+                     |
+                     v
+          ORGANIZATION_MEMBERS
+                     |
+                     |
+              role = OWNER
+                     |
+                     v
+             ORGANIZATION
+               DASHBOARD
+                     |
+          +----------+----------+
+          |                     |
+          v                     v
+   Organization             Members
+     Settings              Management
+          |                     |
+          v                     v
+    OWNER ONLY             OWNER manages
+                           member roles/
+                           membership
+
+Core authorization flow:
+
+Authentication
+      |
+      v
+Who is the user?
+      |
+      v
+Organization membership
+      |
+      v
+What role does the user have?
+      |
+      v
+RBAC
+      |
+      v
+Is this operation allowed?
+      |
+      v
+Controller
+
+============================================================
+21. FINAL BUSINESS RULES
+============================================================
+
+1. An Organization represents a company/workspace/tenant.
+2. Users can belong to multiple organizations.
+3. User-organization membership is handled through
+   organization_members.
+4. user_id + organization_id must be unique.
+5. Organization roles are OWNER, ADMIN, and MEMBER.
+6. The user creating an organization automatically becomes OWNER.
+7. Organization creation and owner membership creation occur in
+   one database transaction.
+8. Only OWNER can modify organization-level entities/settings.
+9. Only OWNER can delete the organization.
+10. OWNER, ADMIN, and MEMBER can view the organization under the
+    current permission model.
+11. OWNER, ADMIN, and MEMBER can view organization members.
+12. Only OWNER can change member roles.
+13. Only OWNER can remove members.
+14. Authentication is handled separately from authorization.
+15. requireOrganizationRole(...) is the generic authorization
+    middleware.
+16. Backend determines roles from database membership records.
+17. Frontend-supplied roles must never be trusted.
+18. 401 means authentication failure.
+19. 403 means authenticated but not permitted.
+20. Every organization-specific request must verify organization
+    access to maintain tenant isolation.
+21. Invitations will be implemented only after Organization and
+    membership functionality is complete.
+22. Teams, Projects, Tasks, AI, Redis, Docker, CI/CD, and
+    Socket.IO are outside the current module.
+
+END OF FINALIZED ORGANIZATION MODULE BUSINESS LOGIC

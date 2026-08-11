@@ -1,0 +1,1033 @@
+ORGANIZATION MODULE — API DESIGN
+
+Project: Multi-tenant SaaS collaboration/project-management application
+Status: Approved API design based strictly on the finalized Organization
+business logic and database design.
+
+============================================================
+1. API SCOPE
+============================================================
+
+The Organization module contains these API areas:
+
+A. Organization
+   - Create organization
+   - Get organization
+   - Update organization
+   - Delete organization
+
+B. Organization Members
+   - Get members
+   - Change member role
+   - Remove member
+
+Base API prefix:
+
+/api/v1/organizations
+
+All organization APIs require authentication.
+
+Authorization is determined by the authenticated user's
+membership in the requested organization.
+
+============================================================
+2. AUTHENTICATION
+============================================================
+
+Authentication is handled by the existing JWT authentication
+middleware.
+
+The JWT is stored in the authentication cookie.
+
+Every Organization API must first verify authentication.
+
+Conceptually:
+
+Request
+   |
+   v
+authenticateUser
+   |
+   v
+Organization authorization, where required
+   |
+   v
+Controller
+
+If authentication fails:
+
+HTTP 401 Unauthorized
+
+Examples:
+- JWT missing
+- JWT invalid
+- JWT expired
+
+The backend gets the authenticated user from:
+
+req.user.id
+
+The client must not provide the authenticated user's ID for
+authorization purposes.
+
+============================================================
+3. AUTHORIZATION
+============================================================
+
+Organization authorization is based on the
+organization_members table.
+
+The backend determines:
+
+1. Which user is making the request.
+2. Which organization is being accessed.
+3. Whether the user belongs to that organization.
+4. What role the user has.
+5. Whether that role is allowed to perform the operation.
+
+The backend must never trust a role supplied by the frontend.
+
+If the user is authenticated but does not have permission:
+
+HTTP 403 Forbidden
+
+============================================================
+4. GENERIC ROLE MIDDLEWARE
+============================================================
+
+Use:
+
+requireOrganizationRole(...)
+
+Examples:
+
+requireOrganizationRole("OWNER")
+
+or:
+
+requireOrganizationRole(["OWNER", "ADMIN"])
+
+The middleware:
+
+1. Gets authenticated user ID from req.user.id.
+2. Gets organizationId from the route parameter.
+3. Finds the user's membership in organization_members.
+4. If membership does not exist, deny access.
+5. Checks the membership role.
+6. If the role is not permitted, return 403.
+7. If permitted, call next().
+
+The middleware may attach the membership to:
+
+req.organizationMembership
+
+so the controller does not need to query the same membership
+again.
+
+============================================================
+5. ORGANIZATION ROUTES
+============================================================
+
+The agreed organization endpoints are:
+
+POST   /api/v1/organizations
+
+GET    /api/v1/organizations
+
+GET    /api/v1/organizations/:organizationId
+
+PATCH  /api/v1/organizations/:organizationId
+
+DELETE /api/v1/organizations/:organizationId
+
+Member endpoints:
+
+GET    /api/v1/organizations/:organizationId/members
+
+PATCH  /api/v1/organizations/:organizationId/members/:userId
+
+DELETE /api/v1/organizations/:organizationId/members/:userId
+
+============================================================
+6. CREATE ORGANIZATION
+============================================================
+
+Endpoint:
+
+POST /api/v1/organizations
+
+Authentication:
+- Required
+- Existing JWT authentication middleware
+
+Authorization:
+- No organization-role middleware is required.
+- The user does not belong to the new organization yet.
+
+Purpose:
+- Create an organization.
+- Automatically make the authenticated user its OWNER.
+
+Request body:
+
+{
+  "name": "Acme Technologies"
+}
+
+The request does NOT contain:
+
+userId
+
+The authenticated user is obtained from:
+
+req.user.id
+
+Business flow:
+
+Request
+  |
+  v
+Authenticate user
+  |
+  v
+Validate organization data
+  |
+  v
+Create organization
+  |
+  v
+Create organization_members record
+  |
+  +-- user_id = req.user.id
+  +-- organization_id = newly created organization
+  +-- role = OWNER
+  |
+  v
+Commit transaction
+  |
+  v
+Return success
+
+The organization creation and owner membership creation must be
+performed in one database transaction.
+
+If either operation fails:
+- Roll back the transaction.
+- Do not leave an organization without its owner membership.
+
+Success response:
+
+HTTP 201 Created
+
+Example:
+
+{
+  "status": true,
+  "message": "Organization created successfully",
+  "data": {
+    "id": 10,
+    "name": "Acme Technologies",
+    "slug": "acme-technologies",
+    "description": null,
+    "logo_url": null,
+    "status": "active"
+  }
+}
+
+The exact project-wide response wrapper should follow the
+existing API response convention.
+
+============================================================
+7. CREATE ORGANIZATION — FAILURE CASES
+============================================================
+
+Invalid request data:
+
+HTTP 400
+
+Example:
+
+{
+  "name": ""
+}
+
+The request must fail validation.
+
+Database failure:
+
+- Transaction is rolled back.
+- Return the project's standard server/database error response.
+
+The authenticated user's ID must never be accepted from the
+request body in place of req.user.id.
+
+============================================================
+8. GET ORGANIZATION
+============================================================
+
+Endpoint:
+
+GET /api/v1/organizations/:organizationId
+
+Authentication:
+- Required
+
+Authorization:
+- User must belong to the requested organization.
+- OWNER, ADMIN and MEMBER can view the organization under the
+  approved permission model.
+
+Flow:
+
+Request
+  |
+  v
+Authenticate user
+  |
+  v
+Get organizationId
+  |
+  v
+Check organization membership
+  |
+  +-- No membership -> 403
+  |
+  +-- Membership exists
+          |
+          v
+      Get organization
+          |
+          v
+      Return organization
+
+Success:
+
+HTTP 200 OK
+
+Example:
+
+{
+  "status": true,
+  "message": "Organization fetched successfully",
+  "data": {
+    "id": 10,
+    "name": "Acme Technologies",
+    "slug": "acme-technologies",
+    "description": null,
+    "logo_url": null,
+    "status": "active"
+  }
+}
+
+If the organization does not exist:
+
+Return the project's standard not-found response.
+
+If the organization exists but the authenticated user is not a
+member:
+
+Return access denied.
+
+============================================================
+9. UPDATE ORGANIZATION
+============================================================
+
+Endpoint:
+
+PATCH /api/v1/organizations/:organizationId
+
+Authentication:
+- Required
+
+Authorization:
+- OWNER only
+
+Middleware concept:
+
+authenticateUser
+requireOrganizationRole("OWNER")
+updateOrganization
+
+Approved organization fields:
+
+name
+slug
+description
+logo_url
+status
+
+Only fields that are actually included in the request should be
+updated.
+
+Example request:
+
+{
+  "name": "Acme Technologies Pvt Ltd",
+  "description": "Software development company"
+}
+
+Flow:
+
+Request
+  |
+  v
+Authenticate user
+  |
+  v
+Check organization membership
+  |
+  v
+Check role
+  |
+  +-- Not OWNER -> 403
+  |
+  +-- OWNER
+        |
+        v
+     Validate data
+        |
+        v
+     Update organization
+        |
+        v
+     Return updated organization
+
+Success:
+
+HTTP 200 OK
+
+Example:
+
+{
+  "status": true,
+  "message": "Organization updated successfully",
+  "data": {
+    "id": 10,
+    "name": "Acme Technologies Pvt Ltd",
+    "slug": "acme-technologies",
+    "description": "Software development company",
+    "logo_url": null,
+    "status": "active"
+  }
+}
+
+============================================================
+10. UPDATE ORGANIZATION — FAILURE CASES
+============================================================
+
+Unauthenticated:
+
+401 Unauthorized
+
+User is not a member:
+
+403 Forbidden
+
+User is ADMIN:
+
+403 Forbidden
+
+User is MEMBER:
+
+403 Forbidden
+
+User is OWNER:
+
+Operation is allowed if validation succeeds.
+
+Invalid update data:
+
+400 Bad Request
+
+Organization does not exist:
+
+Use the project's standard not-found response.
+
+============================================================
+11. DELETE ORGANIZATION
+============================================================
+
+Endpoint:
+
+DELETE /api/v1/organizations/:organizationId
+
+Authentication:
+- Required
+
+Authorization:
+- OWNER only
+
+Middleware concept:
+
+authenticateUser
+requireOrganizationRole("OWNER")
+deleteOrganization
+
+Flow:
+
+Request
+  |
+  v
+Authenticate user
+  |
+  v
+Check membership
+  |
+  v
+Check role
+  |
+  +-- Not OWNER -> 403
+  |
+  +-- OWNER
+        |
+        v
+     Delete organization
+        |
+        v
+     Return success
+
+Success:
+
+HTTP 200 OK
+
+Example:
+
+{
+  "status": true,
+  "message": "Organization deleted successfully"
+}
+
+The exact deletion/cleanup behavior of future related entities
+has not been finalized.
+
+Do not introduce additional deletion behavior into this API
+design.
+
+============================================================
+12. DELETE ORGANIZATION — FAILURE CASES
+============================================================
+
+Unauthenticated:
+
+401 Unauthorized
+
+User is not a member:
+
+403 Forbidden
+
+ADMIN:
+
+403 Forbidden
+
+MEMBER:
+
+403 Forbidden
+
+OWNER:
+
+Deletion is allowed.
+
+Organization does not exist:
+
+Use the project's standard not-found response.
+
+============================================================
+13. GET ORGANIZATION MEMBERS
+============================================================
+
+Endpoint:
+
+GET /api/v1/organizations/:organizationId/members
+
+Authentication:
+- Required
+
+Authorization:
+- OWNER, ADMIN and MEMBER can view members.
+
+Flow:
+
+Request
+  |
+  v
+Authenticate user
+  |
+  v
+Check membership
+  |
+  +-- No membership -> 403
+  |
+  +-- Membership exists
+          |
+          v
+      Fetch organization members
+          |
+          v
+      Return members
+
+Success:
+
+HTTP 200 OK
+
+Example:
+
+{
+  "status": true,
+  "message": "Organization members fetched successfully",
+  "data": [
+    {
+      "userId": 1,
+      "role": "OWNER"
+    },
+    {
+      "userId": 2,
+      "role": "ADMIN"
+    },
+    {
+      "userId": 3,
+      "role": "MEMBER"
+    }
+  ]
+}
+
+The response should follow the project's established response
+format.
+
+============================================================
+14. GET MEMBERS — FAILURE CASES
+============================================================
+
+Unauthenticated:
+
+401 Unauthorized
+
+Authenticated user is not a member:
+
+403 Forbidden
+
+Organization does not exist:
+
+Use the project's standard not-found response.
+
+A member with no other members is still a valid organization
+state; the API returns the members that exist.
+
+============================================================
+15. CHANGE MEMBER ROLE
+============================================================
+
+Endpoint:
+
+PATCH /api/v1/organizations/:organizationId/members/:userId
+
+Authentication:
+- Required
+
+Authorization:
+- OWNER only
+
+Purpose:
+- Change a member's role within the organization.
+
+Request body:
+
+{
+  "role": "ADMIN"
+}
+
+or:
+
+{
+  "role": "MEMBER"
+}
+
+Approved roles:
+
+OWNER
+ADMIN
+MEMBER
+
+Flow:
+
+Request
+  |
+  v
+Authenticate user
+  |
+  v
+Check requesting user's membership
+  |
+  v
+Check requesting user's role
+  |
+  +-- Not OWNER -> 403
+  |
+  +-- OWNER
+        |
+        v
+     Find target member
+        |
+        v
+     Validate new role
+        |
+        v
+     Update membership role
+        |
+        v
+     Return success
+
+Success:
+
+HTTP 200 OK
+
+Example:
+
+{
+  "status": true,
+  "message": "Member role updated successfully"
+}
+
+============================================================
+16. CHANGE MEMBER ROLE — FAILURE CASES
+============================================================
+
+Unauthenticated:
+
+401 Unauthorized
+
+Requester is not a member:
+
+403 Forbidden
+
+Requester is ADMIN:
+
+403 Forbidden
+
+Requester is MEMBER:
+
+403 Forbidden
+
+Target user is not a member of the organization:
+
+Return the project's standard not-found response.
+
+Invalid role:
+
+400 Bad Request
+
+Example:
+
+{
+  "role": "SUPER_ADMIN"
+}
+
+This is not one of the approved roles.
+
+============================================================
+17. REMOVE MEMBER
+============================================================
+
+Endpoint:
+
+DELETE /api/v1/organizations/:organizationId/members/:userId
+
+Authentication:
+- Required
+
+Authorization:
+- OWNER only
+
+Flow:
+
+Request
+  |
+  v
+Authenticate user
+  |
+  v
+Check requesting user's membership
+  |
+  v
+Check requesting user's role
+  |
+  +-- Not OWNER -> 403
+  |
+  +-- OWNER
+        |
+        v
+     Find target membership
+        |
+        v
+     Remove membership
+        |
+        v
+     Return success
+
+Success:
+
+HTTP 200 OK
+
+Example:
+
+{
+  "status": true,
+  "message": "Member removed successfully"
+}
+
+============================================================
+18. REMOVE MEMBER — FAILURE CASES
+============================================================
+
+Unauthenticated:
+
+401 Unauthorized
+
+Requester is not a member:
+
+403 Forbidden
+
+Requester is ADMIN:
+
+403 Forbidden
+
+Requester is MEMBER:
+
+403 Forbidden
+
+Target user is not a member of the organization:
+
+Return the project's standard not-found response.
+
+============================================================
+19. ORGANIZATION ACCESS SECURITY
+============================================================
+
+Every organization-specific endpoint must verify that the
+authenticated user belongs to the requested organization.
+
+Example:
+
+User 5 belongs to Organization 10.
+
+Request:
+
+GET /api/v1/organizations/20
+
+If User 5 does not belong to Organization 20:
+
+Access must be denied.
+
+The backend must not simply fetch organization 20 because the
+organizationId was supplied by the client.
+
+The organization ID is an identifier, not proof of access.
+
+============================================================
+20. ROLE AUTHORIZATION MATRIX
+============================================================
+
+Operation                         Owner   Admin   Member
+---------------------------------------------------------
+Create organization                Yes*    Yes*    Yes*
+View organization                  Yes     Yes     Yes
+Update organization                Yes     No      No
+Delete organization                Yes     No      No
+View members                       Yes     Yes     Yes
+Change member role                 Yes     No      No
+Remove member                      Yes     No      No
+
+* Creating an organization does not require an existing
+organization role because the organization does not exist yet.
+The authenticated creator becomes OWNER.
+
+============================================================
+21. ROUTE MIDDLEWARE STRUCTURE
+============================================================
+
+Create organization:
+
+router.post(
+  "/",
+  authenticateUser,
+  createOrganization
+);
+
+Get organization:
+
+router.get(
+  "/:organizationId",
+  authenticateUser,
+  requireOrganizationRole(["OWNER", "ADMIN", "MEMBER"]),
+  getOrganization
+);
+
+Update organization:
+
+router.patch(
+  "/:organizationId",
+  authenticateUser,
+  requireOrganizationRole("OWNER"),
+  updateOrganization
+);
+
+Delete organization:
+
+router.delete(
+  "/:organizationId",
+  authenticateUser,
+  requireOrganizationRole("OWNER"),
+  deleteOrganization
+);
+
+Get members:
+
+router.get(
+  "/:organizationId/members",
+  authenticateUser,
+  requireOrganizationRole(["OWNER", "ADMIN", "MEMBER"]),
+  getOrganizationMembers
+);
+
+Change member role:
+
+router.patch(
+  "/:organizationId/members/:userId",
+  authenticateUser,
+  requireOrganizationRole("OWNER"),
+  updateMemberRole
+);
+
+Remove member:
+
+router.delete(
+  "/:organizationId/members/:userId",
+  authenticateUser,
+  requireOrganizationRole("OWNER"),
+  removeMember
+);
+
+The exact router/controller naming should follow the project's
+existing conventions.
+
+============================================================
+22. IMPORTANT NOTE ABOUT MEMBERSHIP CHECKING
+============================================================
+
+For endpoints where all organization members are allowed
+(OWNER, ADMIN, MEMBER), the authorization check still matters.
+
+For example:
+
+GET /organizations/10
+
+The backend must verify that the authenticated user has a
+membership record for organization 10.
+
+It is not enough to simply check that the user is logged in.
+
+============================================================
+23. API SECURITY RULES
+============================================================
+
+1. JWT authentication is required for all Organization APIs.
+
+2. Never accept the authenticated user's ID from the request
+   body for authorization.
+
+3. Use req.user.id.
+
+4. Never trust a role sent by the frontend.
+
+5. Get the user's organization role from organization_members.
+
+6. Always verify organization membership for organization-
+   specific requests.
+
+7. Return 401 when authentication fails.
+
+8. Return 403 when authentication succeeds but authorization
+   fails.
+
+9. Validate request body data before performing database updates.
+
+10. Only OWNER can update/delete organization-level information.
+
+11. Only OWNER can change member roles.
+
+12. Only OWNER can remove members.
+
+13. OWNER, ADMIN and MEMBER can view organization information
+    and members under the approved permission model.
+
+14. Organization creation must create the organization and
+    owner membership in one transaction.
+
+============================================================
+24. END-TO-END ORGANIZATION FLOW
+============================================================
+
+User
+ |
+ | Login
+ v
+JWT authentication
+ |
+ v
+POST /api/v1/organizations
+ |
+ v
+Create organization
+ |
+ v
+Create organization_members record
+ |
+ | role = OWNER
+ v
+Organization Dashboard
+ |
+ +---------------------------+
+ |                           |
+ v                           v
+GET organization        GET members
+ |
+ +---------------------------+
+ |
+ v
+OWNER
+ |
+ +--> PATCH organization
+ |
+ +--> DELETE organization
+ |
+ +--> PATCH member role
+ |
+ +--> DELETE member
+ |
+ v
+ADMIN / MEMBER
+ |
+ +--> View organization
+ |
+ +--> View members
+
+============================================================
+25. FINAL API LIST
+============================================================
+
+Organization:
+
+POST   /api/v1/organizations
+GET    /api/v1/organizations/:organizationId
+PATCH  /api/v1/organizations/:organizationId
+DELETE /api/v1/organizations/:organizationId
+
+Members:
+
+GET    /api/v1/organizations/:organizationId/members
+PATCH  /api/v1/organizations/:organizationId/members/:userId
+DELETE /api/v1/organizations/:organizationId/members/:userId
+
+These are the approved Organization-module APIs based on the
+finalized business logic and database design.
+
+END OF ORGANIZATION MODULE API DESIGN

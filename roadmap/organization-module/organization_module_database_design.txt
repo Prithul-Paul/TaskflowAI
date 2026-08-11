@@ -1,0 +1,603 @@
+ORGANIZATION MODULE — DATABASE DESIGN
+
+Project: Multi-tenant SaaS collaboration/project-management application
+Status: Approved database design
+Scope: Organization module only
+
+============================================================
+1. DATABASE STRUCTURE
+============================================================
+
+The Organization module requires two new tables:
+
+1. organizations
+2. organization_members
+
+The existing users table remains unchanged for this module.
+
+Overall relationship:
+
+users
+  |
+  | 1:N
+  v
+organization_members
+  ^
+  | N:1
+  |
+organizations
+
+Conceptually:
+
+User <----> Organization
+          |
+          |
+          v
+organization_members
+
+This represents a many-to-many relationship between users and
+organizations.
+
+============================================================
+2. ORGANIZATIONS TABLE
+============================================================
+
+Table name:
+
+organizations
+
+Columns:
+
+id
+name
+slug
+description
+logo_url
+status
+created_at
+updated_at
+
+Column design:
+
+id
+- Type: Same primary-key type used by the existing users table
+  where applicable.
+- Primary Key
+- Auto Increment
+- Not Null
+
+name
+- Type: VARCHAR(255)
+- Not Null
+- Organization name
+
+slug
+- Type: VARCHAR(255)
+- Nullable
+- Organization-friendly identifier
+
+description
+- Type: TEXT
+- Nullable
+- Organization description
+
+logo_url
+- Type: VARCHAR(500)
+- Nullable
+- Organization logo URL
+
+status
+- Type: ENUM or equivalent
+- Nullable
+- Current organization status
+
+created_at
+- DATETIME
+- Not Null
+- Creation timestamp
+
+updated_at
+- DATETIME
+- Not Null
+- Last update timestamp
+
+Important:
+- "name" is the required organization field.
+- Do not add additional organization fields beyond the approved
+  structure.
+
+============================================================
+3. ORGANIZATION_MEMBERS TABLE
+============================================================
+
+Table name:
+
+organization_members
+
+Columns:
+
+id
+organization_id
+user_id
+role
+created_at
+updated_at
+
+Column design:
+
+id
+- Type: Same primary-key type used by the existing users table
+  where applicable.
+- Primary Key
+- Auto Increment
+- Not Null
+
+organization_id
+- Type: Same type as organizations.id
+- Not Null
+- Foreign Key -> organizations.id
+
+user_id
+- Type: Same type as users.id
+- Not Null
+- Foreign Key -> users.id
+
+role
+- Type: ENUM("OWNER", "ADMIN", "MEMBER")
+- Not Null
+- Represents the user's role inside this organization
+
+created_at
+- DATETIME
+- Not Null
+- Membership creation timestamp
+
+updated_at
+- DATETIME
+- Not Null
+- Membership update timestamp
+
+============================================================
+4. FOREIGN KEY RELATIONSHIPS
+============================================================
+
+organization_members.organization_id references:
+
+organizations.id
+
+Relationship:
+
+organizations
+     |
+     | 1:N
+     v
+organization_members
+
+A single organization can have multiple membership records.
+
+------------------------------------------------------------
+
+organization_members.user_id references:
+
+users.id
+
+Relationship:
+
+users
+  |
+  | 1:N
+  v
+organization_members
+
+A single user can have multiple organization membership records.
+
+============================================================
+5. UNIQUE CONSTRAINT
+============================================================
+
+The following combination must be unique:
+
+user_id + organization_id
+
+Database constraint:
+
+UNIQUE(user_id, organization_id)
+
+Purpose:
+
+Prevent the same user from having duplicate membership records
+inside the same organization.
+
+Invalid example:
+
+organization_id | user_id | role
+--------------------------------
+10              | 5       | OWNER
+10              | 5       | MEMBER
+
+The second record must not be allowed.
+
+Valid example:
+
+organization_id | user_id | role
+--------------------------------
+10              | 5       | OWNER
+20              | 5       | MEMBER
+
+The same user can belong to different organizations with
+different roles.
+
+============================================================
+6. ROLE DESIGN
+============================================================
+
+Approved organization roles:
+
+OWNER
+ADMIN
+MEMBER
+
+The role is stored in organization_members, NOT in users.
+
+This is important because a user's role is organization-specific.
+
+Example:
+
+User John:
+
+Organization A -> OWNER
+Organization B -> MEMBER
+
+The users table does not need to change when John's role changes
+between organizations.
+
+============================================================
+7. SEQUELIZE ORGANIZATION MODEL
+============================================================
+
+Conceptual model:
+
+Organization.js
+
+const Organization = sequelize.define(
+  "Organization",
+  {
+    id: {
+      type: DataTypes.BIGINT,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+
+    name: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+
+    slug: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+
+    logoUrl: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+    },
+
+    status: {
+      type: DataTypes.ENUM("active", "inactive"),
+      allowNull: true,
+    },
+  },
+  {
+    tableName: "organizations",
+    underscored: true,
+  }
+);
+
+Important:
+- Use the actual primary-key type already established in the
+  project if it differs from BIGINT.
+- Preserve the project's existing Sequelize conventions.
+
+============================================================
+8. SEQUELIZE ORGANIZATION_MEMBER MODEL
+============================================================
+
+Conceptual model:
+
+OrganizationMember.js
+
+const OrganizationMember = sequelize.define(
+  "OrganizationMember",
+  {
+    id: {
+      type: DataTypes.BIGINT,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+
+    organizationId: {
+      type: DataTypes.BIGINT,
+      allowNull: false,
+    },
+
+    userId: {
+      type: DataTypes.BIGINT,
+      allowNull: false,
+    },
+
+    role: {
+      type: DataTypes.ENUM("OWNER", "ADMIN", "MEMBER"),
+      allowNull: false,
+    },
+  },
+  {
+    tableName: "organization_members",
+    underscored: true,
+
+    indexes: [
+      {
+        unique: true,
+        fields: ["organization_id", "user_id"],
+      },
+    ],
+  }
+);
+
+Important:
+- userId type must match users.id.
+- organizationId type must match organizations.id.
+- The unique composite constraint must be preserved.
+
+============================================================
+9. SEQUELIZE ASSOCIATIONS
+============================================================
+
+User -> OrganizationMember:
+
+User.hasMany(OrganizationMember, {
+  foreignKey: "userId",
+});
+
+OrganizationMember.belongsTo(User, {
+  foreignKey: "userId",
+});
+
+Organization -> OrganizationMember:
+
+Organization.hasMany(OrganizationMember, {
+  foreignKey: "organizationId",
+});
+
+OrganizationMember.belongsTo(Organization, {
+  foreignKey: "organizationId",
+});
+
+============================================================
+10. MANY-TO-MANY ASSOCIATIONS
+============================================================
+
+The direct many-to-many relationship can also be defined through
+OrganizationMember.
+
+User:
+
+User.belongsToMany(Organization, {
+  through: OrganizationMember,
+  foreignKey: "userId",
+  otherKey: "organizationId",
+});
+
+Organization:
+
+Organization.belongsToMany(User, {
+  through: OrganizationMember,
+  foreignKey: "organizationId",
+  otherKey: "userId",
+});
+
+OrganizationMember remains important because it contains the
+organization-specific role.
+
+============================================================
+11. DATABASE DIAGRAM
+============================================================
+
++-------------------------+
+|          users          |
++-------------------------+
+| id PK                   |
+| first_name              |
+| last_name               |
+| email                   |
+| password_hash           |
+| status                  |
+| ...                     |
++------------+------------+
+             |
+             | 1:N
+             |
+             v
++-------------------------------+
+|     organization_members      |
++-------------------------------+
+| id PK                         |
+| organization_id FK            |
+| user_id FK                   |
+| role                          |
+| created_at                    |
+| updated_at                    |
+|                               |
+| UNIQUE(user_id,               |
+|        organization_id)       |
++---------------+---------------+
+                |
+                | N:1
+                |
+                v
++-----------------------------+
+|       organizations         |
++-----------------------------+
+| id PK                       |
+| name                        |
+| slug                        |
+| description                 |
+| logo_url                    |
+| status                      |
+| created_at                  |
+| updated_at                  |
++-----------------------------+
+
+============================================================
+12. EXAMPLE DATA
+============================================================
+
+Users:
+
+id | name
+---------
+1  | John
+2  | Alice
+3  | Bob
+
+Organizations:
+
+id | name
+---------------------
+10 | Acme Technologies
+20 | XYZ Corporation
+
+Organization memberships:
+
+organization_id | user_id | role
+----------------------------------
+10              | 1       | OWNER
+10              | 2       | ADMIN
+10              | 3       | MEMBER
+20              | 1       | OWNER
+
+This means:
+
+John:
+- Acme Technologies -> OWNER
+- XYZ Corporation -> OWNER
+
+Alice:
+- Acme Technologies -> ADMIN
+
+Bob:
+- Acme Technologies -> MEMBER
+
+============================================================
+13. ORGANIZATION CREATION DATABASE FLOW
+============================================================
+
+When a user creates an organization:
+
+Step 1:
+Create record in organizations.
+
+Example:
+
+organizations
+
+id | name
+---------------------
+10 | Acme Technologies
+
+Step 2:
+Create membership for the authenticated user.
+
+organization_members
+
+organization_id | user_id | role
+----------------------------------
+10              | 1       | OWNER
+
+Both operations must be performed inside one database
+transaction.
+
+If membership creation fails, the organization creation must
+also be rolled back.
+
+============================================================
+14. IMPORTANT DATABASE RULES
+============================================================
+
+1. Only two new tables are required for the Organization module:
+   organizations and organization_members.
+
+2. users remains the existing user table.
+
+3. Users and organizations have a many-to-many relationship
+   through organization_members.
+
+4. organization_members.organization_id is a foreign key to
+   organizations.id.
+
+5. organization_members.user_id is a foreign key to users.id.
+
+6. user_id + organization_id must be unique.
+
+7. Role is stored in organization_members.
+
+8. Approved roles are:
+   OWNER
+   ADMIN
+   MEMBER
+
+9. The user's role is organization-specific.
+
+10. Organization creation creates both:
+    - the organization
+    - the creator's OWNER membership
+
+11. Organization creation and owner membership creation must be
+    transactional.
+
+12. Foreign-key types must match the referenced primary-key types.
+
+13. Sequelize migrations should be used to create and modify the
+    database schema.
+
+============================================================
+15. FINAL APPROVED STRUCTURE
+============================================================
+
+New tables:
+
+organizations
+organization_members
+
+Relationships:
+
+users
+  |
+  +----< organization_members >----+
+                                   |
+                                   v
+                            organizations
+
+Primary business relationship:
+
+User <---- many-to-many ----> Organization
+
+through:
+
+organization_members
+
+The membership record contains:
+
+- user_id
+- organization_id
+- role
+
+This is the complete database design for the approved
+Organization module.
+
+END OF ORGANIZATION MODULE DATABASE DESIGN
