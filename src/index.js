@@ -11,7 +11,7 @@ const sequelize = require('./db'); // db setup using "Sequilize" ORM
 require("./models"); // Loading all the models
 
 const authRoutes = require("./routers/auth");
-
+const organizationRoutes = require("./routers/organization");
 
 
 const app = express();
@@ -29,6 +29,7 @@ app.use(cookieParser());
 
 // Api endpoints
 app.use("/v1/api/", authRoutes);
+app.use("/v1/api/", organizationRoutes);
 
 
 async function startServer(){

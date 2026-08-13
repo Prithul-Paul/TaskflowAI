@@ -35,7 +35,7 @@ const OrganizationMember = sequelize.define(
     },
 
     role: {
-      type: DataTypes.ENUM("OWNER", "ADMIN", "MEMBER"),
+      type: DataTypes.ENUM("owner", "admin", "member"),
       allowNull: false,
     },
 
