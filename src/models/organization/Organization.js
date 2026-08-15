@@ -45,11 +45,19 @@ const Organization = sequelize.define(
       allowNull: false,
       defaultValue: "active",
     },
+
+    deleted_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      
+    },
   },
   {
     tableName: "organizations",
     timestamps: true,
     underscored: true,
+    paranoid: true,
+    deletedAt: "deleted_at",
   }
 );
 

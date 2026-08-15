@@ -2,6 +2,7 @@ require("dotenv").config();
 
 
 const express = require('express');
+const fileUpload = require('express-fileupload');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 
@@ -24,6 +25,12 @@ app.use(
   })
 );
 app.use(express.json());
+app.use(fileUpload({
+  limits: { fileSize: 100 * 1024 * 1024 },
+  abortOnLimit: true,
+  createParentPath: true,
+  useTempFiles: false,
+}));
 app.use(cookieParser());
 
 

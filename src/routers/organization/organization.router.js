@@ -6,25 +6,32 @@ const {
   getOrganization,
   updateOrganization,
   deleteOrganization,
+  getOrganizationMembers,
+  updateOrganizationMemberRole,
+  deleteOrganizationMember,
 } = require("../../controllers/organization/organization.controller");
 const authenticate = require("../../middlewares/auth.middleware");
 const { requireOrganizationRole } = require("../../middlewares/organization.middleware");
 
 const router = express.Router();
 
-// POST   /v1/api/organizations
+
+// Organizations endpoints
 router.post("/", authenticate, createOrganization);
 
-// GET    /v1/api/organizations
 router.get("/", authenticate, getAllOrganizations);
 
-// GET    /v1/api/organizations/:organizationId
-router.get("/:organizationId", authenticate, getOrganization);
+router.get("/:organizationId", authenticate, requireOrganizationRole(), getOrganization);
 
-// PATCH  /v1/api/organizations/:organizationId
 router.patch("/:organizationId", authenticate, requireOrganizationRole(["owner"]), updateOrganization);
 
-// DELETE /v1/api/organizations/:organizationId
 router.delete("/:organizationId", authenticate, requireOrganizationRole(["owner"]), deleteOrganization);
+
+// Members endpoints
+router.get("/:organizationId/members", authenticate, requireOrganizationRole(), getOrganizationMembers);
+
+router.patch("/:organizationId/members/:userId", authenticate, requireOrganizationRole(["owner"]), updateOrganizationMemberRole);
+
+router.delete("/:organizationId/members/:userId", authenticate, requireOrganizationRole(["owner"]), deleteOrganizationMember);
 
 module.exports = router;
