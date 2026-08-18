@@ -289,7 +289,7 @@ async function login(req, res) {
   }
 }
 
-function home(req, res) {
+function loggedInUsr(req, res) {
   return res.status(200).json({
     status: true,
     message: "Authenticated user information.",
@@ -534,4 +534,4 @@ async function resetPassword(req, res) {
   }
 }
 
-module.exports = { register, login, logout, home, verifyEmail, resendVerificationEmail, forgotPassword, resetPassword };
+module.exports = { register, login, loggedInUsr, logout, verifyEmail, resendVerificationEmail, forgotPassword, resetPassword };
