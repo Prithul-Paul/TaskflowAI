@@ -5,7 +5,7 @@ const express = require('express');
 const fileUpload = require('express-fileupload');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
-
+const path = require("path");
 // console.log("PORT:", PORT);
 
 const sequelize = require('./db'); // db setup using "Sequilize" ORM
@@ -33,6 +33,11 @@ app.use(fileUpload({
 }));
 app.use(cookieParser());
 
+
+app.use(
+  "/storage",
+  express.static(path.join(__dirname, "../storage"))
+);
 
 // Api endpoints
 app.use("/v1/api/", authRoutes);

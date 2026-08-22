@@ -96,6 +96,7 @@ async function createOrganization(req, res) {
       message: "Organization created successfully",
       data: {
         id: organization.id,
+        uuid: organization.uuid,
         name: organization.name,
         slug: organization.slug,
         description: organization.description,
@@ -132,13 +133,26 @@ async function getAllOrganizations(req, res) {
   try {
     const memberships = await OrganizationMember.findAll({
       where: { userId: req.user.id },
-      include: [{ model: Organization }],
+      include: [
+        {
+          model: Organization,
+          include: [
+            {
+              model: OrganizationMember,
+              where: { role: "owner" },
+              include: [{ model: User, attributes: ["id", "email", "firstName", "lastName"] }],
+            },
+          ],
+        },
+      ],
     });
 
     // return res.send(memberships);
 
     const organizations = memberships.map((membership) => {
       const org = membership.Organization || {};
+      const owner = org.OrganizationMembers?.[0]?.User || {};
+      // const org = membership.Organization || {};
 
       return {
         id: org.id,
@@ -149,6 +163,13 @@ async function getAllOrganizations(req, res) {
         status: org.status,
         uuid: org.uuid,
         role: membership.role,
+        created_at: org.createdAt,
+        owner: {
+          id: owner.id,
+          email: owner.email,
+          name: `${owner.firstName || ""} ${owner.lastName || ""}`.trim(),
+        },
+
       };
     });
 
@@ -318,12 +339,13 @@ async function getOrganizationMembers(req, res) {
   try {
     const members = await OrganizationMember.findAll({
       where: { organizationId: organization.id },
-      include: [{ model: User, attributes: ["firstName", "lastName", "email"] }],
+      include: [{ model: User, attributes: ["id", "firstName", "lastName", "email"] }],
     });
 
     const result = members.map((m) => {
       const u = m.User || {};
       return {
+        id: u.id,
         first_name: u.firstName,
         last_name: u.lastName,
         email: u.email,
