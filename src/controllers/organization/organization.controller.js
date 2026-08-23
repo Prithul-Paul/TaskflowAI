@@ -1,10 +1,12 @@
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { z } = require("zod");
 
 const allowedFields = require("../../helpers/validation");
-const { Organization, OrganizationMember, User } = require("../../models");
+const { Organization, OrganizationMember, User, OrganizationInvitation } = require("../../models");
 const sequelize = require("../../db");
+const { sendOrganizationInvitationEmail } = require("../../services/email.service");
 
 const createOrganizationSchema = z.object({
   organization_name: z
@@ -29,6 +31,20 @@ const updateOrganizationSchema = z.object({
 
 const roleSchema = z.object({ role: z.string() });
 
+const inviteMemberSchema = z.object({
+  email: z.string({ error: "email is required." }).trim().email("Please provide a valid email address."),
+  role: z.enum(["member", "admin"], {
+    error: "role must be either member or admin.",
+  }),
+});
+
+const acceptInvitationSchema = z.object({
+  token: z.string({ error: "token is required." }).trim().min(1, "token is required."),
+});
+
+const rejectInvitationSchema = z.object({
+  token: z.string({ error: "token is required." }).trim().min(1, "token is required."),
+});
 
 function slugify(value) {
   return value
@@ -197,6 +213,7 @@ async function getOrganization(req, res) {
       data: {
         organization: {
           id: organization.id,
+          uuid: organization.uuid,
           name: organization.name,
           slug: organization.slug,
           description: organization.description,
@@ -432,6 +449,360 @@ async function deleteOrganizationMember(req, res) {
   }
 }
 
+async function inviteMember(req, res) {
+  const organization = req.organization;
+  const { email, role } = req.body || {};
+
+  const unexpectedFields = allowedFields(req, ["email", "role"]);
+
+  if (unexpectedFields.length > 0) {
+    return res.status(400).json({
+      status: false,
+      message: "Only email and role are allowed.",
+      errors: unexpectedFields.map((field) => ({
+        path: [field],
+        message: "This field is not allowed.",
+      })),
+    });
+  }
+
+  try {
+    const parsedInvitation = inviteMemberSchema.safeParse({ email, role });
+
+    if (!parsedInvitation.success) {
+      return res.status(400).json({
+        status: false,
+        message: "Validation failed.",
+        errors: parsedInvitation.error.issues,
+      });
+    }
+
+    const validatedInvitation = parsedInvitation.data;
+    const normalizedEmail = validatedInvitation.email.trim().toLowerCase();
+
+    const existingUser = await User.findOne({
+      where: { email: normalizedEmail },
+      attributes: ["id", "email"],
+    });
+
+    if (existingUser) {
+      const existingMembership = await OrganizationMember.findOne({
+        where: {
+          organizationId: organization.id,
+          userId: existingUser.id,
+        },
+      });
+
+      if (existingMembership) {
+        return res.status(409).json({
+          status: false,
+          message: "This user is already a member of the organization",
+        });
+      }
+    }
+
+    const pendingInvitation = await OrganizationInvitation.findOne({
+      where: {
+        organizationId: organization.id,
+        email: normalizedEmail,
+        status: "pending",
+      },
+      order: [["createdAt", "DESC"]],
+    });
+
+    if (pendingInvitation) {
+      if (new Date(pendingInvitation.expiresAt) <= new Date()) {
+        await pendingInvitation.update({ status: "expired" });
+      } else {
+        return res.status(409).json({
+          status: false,
+          message: "A pending invitation already exists for this email",
+        });
+      }
+    }
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+    const invitation = await OrganizationInvitation.create({
+      organizationId: organization.id,
+      email: normalizedEmail,
+      invitedBy: req.user.id,
+      role: validatedInvitation.role,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      status: "pending",
+    });
+
+    console.log("RAW TOKEN IS: "+ rawToken);
+
+    await sendOrganizationInvitationEmail({
+      email: normalizedEmail,
+      organizationName: organization.name,
+      role: validatedInvitation.role,
+      token: rawToken,
+    });
+
+    return res.status(201).json({
+      status: true,
+      message: "Invitation sent successfully",
+      data: {
+        id: invitation.id,
+        email: invitation.email,
+        role: invitation.role,
+        status: invitation.status,
+        expires_at: invitation.expiresAt,
+      },
+    });
+  } catch (error) {
+    console.error("Invite member error:", error);
+
+    if (error.name === "SequelizeValidationError") {
+      return res.status(400).json({
+        status: false,
+        message: "Database validation failed.",
+        errors: error.errors.map(({ path, message }) => ({ path: [path], message })),
+      });
+    }
+
+    return res.status(500).json({
+      status: false,
+      message: "Unable to send invitation.",
+    });
+  }
+}
+
+async function acceptInvitation(req, res) {
+  const { token } = req.body || {};
+
+  const unexpectedFields = allowedFields(req, ["token"]);
+
+  if (unexpectedFields.length > 0) {
+    return res.status(400).json({
+      status: false,
+      message: "Only token is allowed.",
+      errors: unexpectedFields.map((field) => ({
+        path: [field],
+        message: "This field is not allowed.",
+      })),
+    });
+  }
+
+  try {
+    const parsedInvitation = acceptInvitationSchema.safeParse({ token });
+
+    if (!parsedInvitation.success) {
+      return res.status(400).json({
+        status: false,
+        message: "Validation failed.",
+        errors: parsedInvitation.error.issues,
+      });
+    }
+
+    const rawToken = parsedInvitation.data.token.trim();
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+    const invitation = await OrganizationInvitation.findOne({
+      where: { tokenHash },
+    });
+
+    if (!invitation) {
+      return res.status(404).json({
+        status: false,
+        message: "Invitation not found.",
+      });
+    }
+
+    if (invitation.status === "accepted") {
+      return res.status(409).json({
+        status: false,
+        message: "This invitation has already been accepted",
+      });
+    }
+
+    if (invitation.status === "cancelled" || invitation.status === "expired") {
+      return res.status(409).json({
+        status: false,
+        message: "Something went wrong",
+      });
+    }
+
+    if (new Date(invitation.expiresAt) < new Date()) {
+      await invitation.update({ status: "expired" });
+      return res.status(410).json({
+        status: false,
+        message: "This invitation has expired.",
+      });
+    }
+
+    const normalizedInvitationEmail = String(invitation.email || "").trim().toLowerCase();
+    const normalizedUserEmail = String(req.user.email || "").trim().toLowerCase();
+
+    if (normalizedInvitationEmail !== normalizedUserEmail) {
+      return res.status(403).json({
+        status: false,
+        message: "You are not authorized to accept this invitation.",
+      });
+    }
+
+    const existingMembership = await OrganizationMember.findOne({
+      where: {
+        organizationId: invitation.organizationId,
+        userId: req.user.id,
+      },
+    });
+
+    if (existingMembership) {
+      return res.status(409).json({
+        status: false,
+        message: "You are already a member of this organization",
+      });
+    }
+
+    const transaction = await sequelize.transaction();
+
+    try {
+      await OrganizationMember.create(
+        {
+          organizationId: invitation.organizationId,
+          userId: req.user.id,
+          role: invitation.role,
+        },
+        { transaction }
+      );
+
+      await invitation.update(
+        {
+          status: "accepted",
+        },
+        { transaction }
+      );
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        status: true,
+        message: "Invitation accepted successfully",
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  } catch (error) {
+    console.error("Accept invitation error:", error);
+
+    if (error.name === "SequelizeValidationError") {
+      return res.status(400).json({
+        status: false,
+        message: "Database validation failed.",
+        errors: error.errors.map(({ path, message }) => ({ path: [path], message })),
+      });
+    }
+
+    return res.status(500).json({
+      status: false,
+      message: "Unable to accept invitation.",
+    });
+  }
+}
+
+async function rejectInvitation(req, res) {
+  const { token } = req.body || {};
+
+  const unexpectedFields = allowedFields(req, ["token"]);
+
+  if (unexpectedFields.length > 0) {
+    return res.status(400).json({
+      status: false,
+      message: "Only token is allowed.",
+      errors: unexpectedFields.map((field) => ({
+        path: [field],
+        message: "This field is not allowed.",
+      })),
+    });
+  }
+
+  try {
+    const parsedInvitation = rejectInvitationSchema.safeParse({ token });
+
+    if (!parsedInvitation.success) {
+      return res.status(400).json({
+        status: false,
+        message: "Validation failed.",
+        errors: parsedInvitation.error.issues,
+      });
+    }
+
+    const rawToken = parsedInvitation.data.token.trim();
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+    const invitation = await OrganizationInvitation.findOne({
+      where: { tokenHash },
+    });
+
+    if (!invitation) {
+      return res.status(404).json({
+        status: false,
+        message: "Invitation not found.",
+      });
+    }
+
+    if (invitation.status === "accepted") {
+      return res.status(409).json({
+        status: false,
+        message: "This invitation has already been accepted",
+      });
+    }
+
+    if (invitation.status === "cancelled" || invitation.status === "expired") {
+      return res.status(409).json({
+        status: false,
+        message: "Something went wrong",
+      });
+    }
+
+    if (new Date(invitation.expiresAt) < new Date()) {
+      await invitation.update({ status: "expired" });
+      return res.status(410).json({
+        status: false,
+        message: "This invitation has expired.",
+      });
+    }
+
+    const normalizedInvitationEmail = String(invitation.email || "").trim().toLowerCase();
+    const normalizedUserEmail = String(req.user.email || "").trim().toLowerCase();
+
+    if (normalizedInvitationEmail !== normalizedUserEmail) {
+      return res.status(403).json({
+        status: false,
+        message: "You are not authorized to reject this invitation.",
+      });
+    }
+
+    await invitation.update({ status: "cancelled" });
+
+    return res.status(200).json({
+      status: true,
+      message: "Invitation rejected successfully",
+    });
+  } catch (error) {
+    console.error("Reject invitation error:", error);
+
+    if (error.name === "SequelizeValidationError") {
+      return res.status(400).json({
+        status: false,
+        message: "Database validation failed.",
+        errors: error.errors.map(({ path, message }) => ({ path: [path], message })),
+      });
+    }
+
+    return res.status(500).json({
+      status: false,
+      message: "Unable to reject invitation.",
+    });
+  }
+}
+
 async function deleteOrganization(req, res) {
   try {
     const organization = req.organization;
@@ -443,4 +814,16 @@ async function deleteOrganization(req, res) {
   }
 }
 
-module.exports = { createOrganization, getAllOrganizations, getOrganization, updateOrganization, deleteOrganization, getOrganizationMembers, updateOrganizationMemberRole, deleteOrganizationMember };
+module.exports = {
+  createOrganization,
+  getAllOrganizations,
+  getOrganization,
+  updateOrganization,
+  deleteOrganization,
+  getOrganizationMembers,
+  updateOrganizationMemberRole,
+  deleteOrganizationMember,
+  inviteMember,
+  acceptInvitation,
+  rejectInvitation,
+};

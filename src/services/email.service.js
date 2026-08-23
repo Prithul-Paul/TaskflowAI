@@ -53,4 +53,20 @@ async function sendPasswordResetConfirmationEmail({ email, firstName }) {
   });
 }
 
-module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendPasswordResetConfirmationEmail };
+async function sendOrganizationInvitationEmail({ email, organizationName, role, token }) {
+  const acceptInvitationUrl = `${process.env.FRONTEND_URL || "http://localhost:5173"}/organization/invitations/accept?token=${encodeURIComponent(token)}`;
+
+  await createTransporter().sendMail({
+    from: process.env.MAIL_FROM || process.env.SMTP_USER,
+    to: email,
+    subject: `You have been invited to join ${organizationName}`,
+    text: `You've been invited to join ${organizationName}\n\nYou have been invited as a ${role}.\n\nAccept Invitation: ${acceptInvitationUrl}`,
+  });
+}
+
+module.exports = {
+  sendVerificationEmail,
+  sendPasswordResetEmail,
+  sendPasswordResetConfirmationEmail,
+  sendOrganizationInvitationEmail,
+};

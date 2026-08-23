@@ -9,6 +9,9 @@ const {
   getOrganizationMembers,
   updateOrganizationMemberRole,
   deleteOrganizationMember,
+  inviteMember,
+  acceptInvitation,
+  rejectInvitation,
 } = require("../../controllers/organization/organization.controller");
 const authenticate = require("../../middlewares/auth.middleware");
 const { requireOrganizationRole } = require("../../middlewares/organization.middleware");
@@ -26,6 +29,16 @@ router.get("/:organizationId", authenticate, requireOrganizationRole(), getOrgan
 router.patch("/:organizationId", authenticate, requireOrganizationRole(["owner"]), updateOrganization);
 
 router.delete("/:organizationId", authenticate, requireOrganizationRole(["owner"]), deleteOrganization);
+
+
+// Organization Invitation
+router.post("/:organizationId/invitation", authenticate, requireOrganizationRole(["owner", "admin"]), inviteMember);
+
+router.post("/invitations/accept", authenticate, acceptInvitation);
+
+router.post("/invitations/reject", authenticate, rejectInvitation);
+
+
 
 // Members endpoints
 router.get("/:organizationId/members", authenticate, requireOrganizationRole(), getOrganizationMembers);
