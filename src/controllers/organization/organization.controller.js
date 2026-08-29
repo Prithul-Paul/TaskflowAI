@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { z } = require("zod");
+// import { Resend } from 'resend';
 
 const allowedFields = require("../../helpers/validation");
 const { Organization, OrganizationMember, User, OrganizationInvitation } = require("../../models");
@@ -43,6 +44,10 @@ const acceptInvitationSchema = z.object({
 });
 
 const rejectInvitationSchema = z.object({
+  token: z.string({ error: "token is required." }).trim().min(1, "token is required."),
+});
+
+const verifyInvitationSchema = z.object({
   token: z.string({ error: "token is required." }).trim().min(1, "token is required."),
 });
 
@@ -534,8 +539,23 @@ async function inviteMember(req, res) {
       status: "pending",
     });
 
-    console.log("RAW TOKEN IS: "+ rawToken);
+    // console.log("RAW TOKEN IS: "+ rawToken);
 
+
+    // const resend = new Resend(process.env.RESEND_SERVICE_APIKEY);
+
+    // const acceptInvitationUrl = `${process.env.FRONTEND_URL || "http://localhost:5173"}/organization/invitations/accept?token=${encodeURIComponent(rawToken)}`;
+
+
+    // await resend.emails.send({
+    //   from: process.env.MAIL_FROM,
+    //   to: normalizedEmail,
+    //   subject: `You have been invited to join ${organization.name}`,
+    //   html: `You've been invited to join ${organization.name}\n\nYou have been invited as a ${validatedInvitation.role}.\n\nAccept Invitation: ${acceptInvitationUrl}`
+    // });
+
+
+    // Sendmail through smptp + nodemailer
     await sendOrganizationInvitationEmail({
       email: normalizedEmail,
       organizationName: organization.name,
@@ -604,7 +624,15 @@ async function acceptInvitation(req, res) {
 
     const invitation = await OrganizationInvitation.findOne({
       where: { tokenHash },
+      include: [
+        {
+          model: Organization,
+          attributes: ["name", "slug", "uuid"]
+        },
+      ]
     });
+
+    // return res.send(invitation);
 
     if (!invitation) {
       return res.status(404).json({
@@ -683,6 +711,11 @@ async function acceptInvitation(req, res) {
       return res.status(200).json({
         status: true,
         message: "Invitation accepted successfully",
+        organization: {
+          name: invitation?.Organization.name,
+          slug: invitation?.Organization.slug,
+          uuid: invitation?.Organization.uuid,
+        }
       });
     } catch (error) {
       await transaction.rollback();
@@ -803,6 +836,67 @@ async function rejectInvitation(req, res) {
   }
 }
 
+async function verifyInvitation(req, res) {
+  const token = String(req.query.token || "").trim();
+
+  const parsed = verifyInvitationSchema.safeParse({ token });
+  if (!parsed.success) {
+    return res.status(400).json({ status: false, message: "Validation failed.", errors: parsed.error.issues });
+  }
+
+  try {
+    const rawToken = parsed.data.token;
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+    const invitation = await OrganizationInvitation.findOne({
+      where: { tokenHash },
+      include: [{ model: Organization }],
+    });
+
+    if (!invitation) {
+      return res.status(404).json({ status: false, message: "Invitation not found." });
+    }
+
+    // Check expiration
+    if (new Date(invitation.expiresAt) < new Date()) {
+      await invitation.update({ status: "expired" });
+      return res.status(410).json({ status: false, message: "This invitation has expired." });
+    }
+
+    const normalizedEmail = String(invitation.email || "").trim().toLowerCase();
+    const user = await User.findOne({ where: { email: normalizedEmail }, attributes: ["id", "email", "firstName", "lastName"] });
+
+    if (!user) {
+      // Not registered
+      return res.json({ 
+        success: true,
+        registration: false,
+        organization: {
+          id: invitation.Organization ? invitation.Organization.id : null,
+          name: invitation.Organization ? invitation.Organization.name : null,
+          logo_url: invitation.Organization ? invitation.Organization.logoUrl : null,
+        },
+        email: invitation.email,
+      });
+    }
+
+    // Registered - return organization details and invitation email
+    return res.json({
+      success: true,
+      registration: true,
+      organization: {
+        id: invitation.Organization ? invitation.Organization.id : null,
+        name: invitation.Organization ? invitation.Organization.name : null,
+        logo_url: invitation.Organization ? invitation.Organization.logoUrl : null,
+      },
+      email: invitation.email,
+    });
+  } catch (error) {
+    console.error("Verify invitation error:", error);
+    return res.status(500).json({ status: false, message: "Unable to verify invitation." });
+  }
+}
+
 async function deleteOrganization(req, res) {
   try {
     const organization = req.organization;
@@ -826,4 +920,5 @@ module.exports = {
   inviteMember,
   acceptInvitation,
   rejectInvitation,
+  verifyInvitation,
 };

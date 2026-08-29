@@ -40,7 +40,7 @@ Organization.hasMany(OrganizationInvitation, {
 });
 
 OrganizationInvitation.belongsTo(Organization, {
-  foreignKey: "organizationId",
+  foreignKey: "organizationId"
 });
 
 module.exports = {

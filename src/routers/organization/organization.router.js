@@ -12,6 +12,7 @@ const {
   inviteMember,
   acceptInvitation,
   rejectInvitation,
+  verifyInvitation,
 } = require("../../controllers/organization/organization.controller");
 const authenticate = require("../../middlewares/auth.middleware");
 const { requireOrganizationRole } = require("../../middlewares/organization.middleware");
@@ -23,6 +24,9 @@ const router = express.Router();
 router.post("/", authenticate, createOrganization);
 
 router.get("/", authenticate, getAllOrganizations);
+
+// Unprotected verification endpoint for invitation token
+router.get("/verify", verifyInvitation);
 
 router.get("/:organizationId", authenticate, requireOrganizationRole(), getOrganization);
 
@@ -37,6 +41,9 @@ router.post("/:organizationId/invitation", authenticate, requireOrganizationRole
 router.post("/invitations/accept", authenticate, acceptInvitation);
 
 router.post("/invitations/reject", authenticate, rejectInvitation);
+
+// Unprotected verification endpoint for invitation token
+// router.get("/verify", verifyInvitation);
 
 
 
