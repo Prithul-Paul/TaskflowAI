@@ -21,9 +21,15 @@ function createTransporter() {
   });
 }
 
-async function sendVerificationEmail({ email, firstName, token }) {
+async function sendVerificationEmail({ email, firstName, token, utm_source }) {
   // const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
-  const verificationUrl = `${process.env.FRONTEND_URL}/verifyemail?token=${encodeURIComponent(token)}`;
+  const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
+  let verificationUrl = `${frontendUrl}/verifyemail?token=${encodeURIComponent(token)}`;
+
+  if (typeof utm_source === 'string' && utm_source.trim() !== '') {
+    // append utm_source as a query parameter
+    verificationUrl += `&utm_source=${encodeURIComponent(utm_source.trim())}`;
+  } 
 
   await createTransporter().sendMail({
     from: process.env.MAIL_FROM || process.env.SMTP_USER,

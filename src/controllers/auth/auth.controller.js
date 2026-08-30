@@ -63,14 +63,14 @@ const FIFTEEN_MINUTES_IN_MS = 15 * 60 * 1000;
 
 
 async function register(req, res) {
-  const { first_name, last_name, email, password, cpassword } = req.body || {};
+  const { first_name, last_name, email, password, cpassword, utm_source } = req.body || {};
 
-  const unexpectedFields = allowedFields(req, ["first_name", "last_name", "email", "password", "cpassword"]);
+  const unexpectedFields = allowedFields(req, ["first_name", "last_name", "email", "password", "cpassword", "utm_source"]);
 
   if (unexpectedFields.length > 0) {
     return res.status(400).json({
       status: false,
-      message: "Only first_name, last_name, email, password, and cpassword are allowed.",
+      message: "Only first_name, last_name, email, password, cpassword and utm_source are allowed.",
       errors: unexpectedFields.map((field) => ({
         path: [field],
         message: "This field is not allowed.",
@@ -124,6 +124,7 @@ async function register(req, res) {
       email: user.email,
       firstName: user.firstName,
       token: rawToken,
+      utm_source: utm_source,
     });
 
     return res.status(201).json({

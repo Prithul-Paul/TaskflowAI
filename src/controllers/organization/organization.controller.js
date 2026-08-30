@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { z } = require("zod");
+const { Op } = require("sequelize");
 // import { Resend } from 'resend';
 
 const allowedFields = require("../../helpers/validation");
@@ -353,18 +354,38 @@ async function updateOrganization(req, res) {
 
 
 async function getOrganizationMembers(req, res) {
-  
   const organization = req.organization;
   const membership = req.organizationMembership;
 
-  
+  // pagination params
+  const rawPage = parseInt(String(req.query.page || "1"), 10);
+  const rawLimit = parseInt(String(req.query.limit || "10"), 10);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 10; // cap limit to 100
+  const offset = (page - 1) * limit;
+
+  // search params
+  const search = req.query.search ? String(req.query.search).trim() : "";
+  const userWhere = search
+    ? {
+        [Op.or]: [
+          { email: { [Op.like]: `%${search}%` } },
+          { firstName: { [Op.like]: `%${search}%` } },
+          { lastName: { [Op.like]: `%${search}%` } },
+        ],
+      }
+    : undefined;
+
   try {
-    const members = await OrganizationMember.findAll({
+    const { count, rows } = await OrganizationMember.findAndCountAll({
       where: { organizationId: organization.id },
-      include: [{ model: User, attributes: ["id", "firstName", "lastName", "email"] }],
+      include: [{ model: User, attributes: ["id", "firstName", "lastName", "email"], where: userWhere }],
+      limit,
+      offset,
+      order: [["createdAt", "ASC"]],
     });
 
-    const result = members.map((m) => {
+    const result = rows.map((m) => {
       const u = m.User || {};
       return {
         id: u.id,
@@ -375,7 +396,19 @@ async function getOrganizationMembers(req, res) {
       };
     });
 
-    return res.status(200).json({ status: true, message: "Organization members fetched successfully", data: result });
+    const totalPages = Math.ceil(count / limit);
+
+    return res.status(200).json({
+      status: true,
+      message: "Organization members fetched successfully",
+      data: result,
+      meta: {
+        total: count,
+        page,
+        limit,
+        total_pages: totalPages,
+      },
+    });
   } catch (error) {
     console.error("Get organization members error:", error);
     return res.status(500).json({ status: false, message: "Unable to fetch organization members." });
