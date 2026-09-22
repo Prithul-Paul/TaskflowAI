@@ -183,8 +183,8 @@ async function getProject(req, res) {
 }
 
 async function updateProject(req, res) {
-  const organization = req.organization;
-  const { projectId } = req.params || {};
+  // const organization = req.organization;
+  // const { projectId } = req.params || {};
 
   const unexpectedFields = allowedFields(req, ["name", "description", "status"]);
 
@@ -232,11 +232,10 @@ async function updateProject(req, res) {
   }
 
   try {
-    const project = await Project.findOne({ where: { id: projectId, organizationId: organization.id } });
-
-    if (!project) {
-      return res.status(404).json({ status: false, message: "Project not found." });
-    }
+    const project = req.project;
+    // if (!project) {
+    //   return res.status(404).json({ status: false, message: "Project not found." });
+    // }
 
     await project.update(updatePayload);
 
@@ -264,15 +263,15 @@ async function updateProject(req, res) {
 }
 
 async function deleteProject(req, res) {
-  const organization = req.organization;
-  const { projectId } = req.params || {};
+  // const organization = req.organization;
+  // const { projectId } = req.params || {};
 
   try {
-    const project = await Project.findOne({ where: { id: projectId, organizationId: organization.id } });
+    const project = req.project;
 
-    if (!project) {
-      return res.status(404).json({ status: false, message: "Project not found." });
-    }
+    // if (!project) {
+    //   return res.status(404).json({ status: false, message: "Project not found." });
+    // }
 
     await project.destroy();
 

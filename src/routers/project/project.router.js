@@ -24,9 +24,9 @@ router.get("/", authenticate, requireOrganizationRole(), getProjects);
 
 router.get("/:projectId", authenticate, requireOrganizationRole(), requireProjectAccess(), getProject);
 
-router.patch("/:projectId", authenticate, requireOrganizationRole(["owner", "admin"]), updateProject);
+router.patch("/:projectId", authenticate, requireOrganizationRole(["owner", "admin"]), requireProjectAccess(), updateProject);
 
-router.delete("/:projectId", authenticate, requireOrganizationRole(["owner", "admin"]), deleteProject);
+router.delete("/:projectId", authenticate, requireOrganizationRole(["owner", "admin"]), requireProjectAccess(), deleteProject);
 
 
 // Project members endpoints
