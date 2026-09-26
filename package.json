@@ -5,7 +5,10 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "db:migrate": "sequelize-cli db:migrate",
+    "db:migrate:status": "sequelize-cli db:migrate:status",
+    "db:migrate:undo": "sequelize-cli db:migrate:undo"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
@@ -19,10 +22,10 @@
     "nodemailer": "^9.0.3",
     "resend": "^6.24.0",
     "sequelize": "^6.37.8",
+    "sequelize-cli": "^6.6.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1",
-    "sequelize-cli": "^6.6.5"
+    "nodemon": "^3.0.1"
   }
 }

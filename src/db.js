@@ -1,22 +1,10 @@
 const { Sequelize } = require("sequelize");
 
-const sequelize = new Sequelize(
-  process.env.DB_NAME || "test",
-  process.env.DB_USER || "root",
-  process.env.DB_PASSWORD || "",
-  {
-    host: process.env.DB_HOST || "localhost",
-    dialect: "mysql",
+const databaseConfig = require("../sequelize-cli.config");
 
-    logging: false,
+const environment = process.env.NODE_ENV || "development";
+const { database, username, password, ...options } = databaseConfig[environment];
 
-    pool: {
-      max: 10,
-      min: 0,
-      acquire: 30000,
-      idle: 10000,
-    },
-  }
-);
+const sequelize = new Sequelize(database, username, password, options);
 
 module.exports = sequelize;

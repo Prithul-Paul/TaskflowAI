@@ -21,7 +21,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: process.env.FRONTEND_URL,
     credentials: true,
   })
 );
@@ -52,8 +52,7 @@ async function startServer(){
     await sequelize.authenticate();
     console.log('MySQL connected successfully');
 
-    await sequelize.sync();
-    console.log("Models synchronized.");
+    // Schema is managed by migrations (npm run db:migrate); never sync() against a live database.
 
     app.listen(PORT, async () => {
       console.log(`Server started on port ${PORT}`);

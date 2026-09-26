@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { Op } = require("sequelize");
 
 const allowedFields = require("../../helpers/validation");
 const { Project, ProjectMember, OrganizationMember, User } = require("../../models");
@@ -383,9 +384,39 @@ async function removeProjectMember(req, res) {
   }
 }
 
+// Project membership has no role of its own; the role comes from the organization membership.
+async function serializeProjectMembers(project, members) {
+  const organizationMemberships = await OrganizationMember.findAll({
+    where: {
+      organizationId: project.organizationId,
+      userId: members.map((member) => member.userId),
+    },
+    attributes: ["userId", "role"],
+  });
+
+  const roleByUserId = new Map(
+    organizationMemberships.map((membership) => [String(membership.userId), membership.role])
+  );
+
+  return members.map((member) => {
+    const user = member.User || {};
+    return {
+      id: user.id,
+      first_name: user.firstName,
+      last_name: user.lastName,
+      email: user.email,
+      role: roleByUserId.get(String(member.userId)) ?? null,
+    };
+  });
+}
+
 async function getProjectMembers(req, res) {
   // requireProjectAccess middleware attaches req.project
   const project = req.project;
+
+  if (req.query.search && String(req.query.search).trim()) {
+    return searchProjectMembers(req, res);
+  }
 
   try {
     const members = await ProjectMember.findAll({
@@ -394,24 +425,46 @@ async function getProjectMembers(req, res) {
       order: [["createdAt", "ASC"]],
     });
 
-    const result = members.map((member) => {
-      const user = member.User || {};
-      return {
-        id: user.id,
-        first_name: user.firstName,
-        last_name: user.lastName,
-        email: user.email,
-      };
+    return res.status(200).json({
+      status: true,
+      message: "Project members fetched successfully",
+      data: await serializeProjectMembers(project, members),
+    });
+  } catch (error) {
+    console.error("Get project members error:", error);
+    return res.status(500).json({ status: false, message: "Unable to fetch project members." });
+  }
+}
+
+async function searchProjectMembers(req, res) {
+  // requireProjectAccess middleware attaches req.project
+  const project = req.project;
+
+  // search params
+  const search = req.query.search ? String(req.query.search).trim() : "";
+  const userWhere = {
+    [Op.or]: [
+      { email: { [Op.like]: `%${search}%` } },
+      { firstName: { [Op.like]: `%${search}%` } },
+      { lastName: { [Op.like]: `%${search}%` } },
+    ],
+  };
+
+  try {
+    const members = await ProjectMember.findAll({
+      where: { projectId: project.id },
+      include: [{ model: User, attributes: ["id", "firstName", "lastName", "email"], where: userWhere }],
+      order: [["createdAt", "ASC"]],
     });
 
     return res.status(200).json({
       status: true,
       message: "Project members fetched successfully",
-      data: result,
+      data: await serializeProjectMembers(project, members),
     });
   } catch (error) {
-    console.error("Get project members error:", error);
-    return res.status(500).json({ status: false, message: "Unable to fetch project members." });
+    console.error("Search project members error:", error);
+    return res.status(500).json({ status: false, message: "Unable to search project members." });
   }
 }
 
@@ -424,4 +477,5 @@ module.exports = {
   addProjectMember,
   removeProjectMember,
   getProjectMembers,
+  searchProjectMembers,
 };
