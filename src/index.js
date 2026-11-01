@@ -14,6 +14,7 @@ require("./models"); // Loading all the models
 const authRoutes = require("./routers/auth");
 const organizationRoutes = require("./routers/organization");
 const projectRoutes = require("./routers/project");
+const taskRoutes = require("./routers/task");
 
 
 const app = express();
@@ -44,6 +45,7 @@ app.use(
 app.use("/v1/api/", authRoutes);
 app.use("/v1/api/", organizationRoutes);
 app.use("/v1/api/", projectRoutes);
+app.use("/v1/api/", taskRoutes);
 
 
 async function startServer(){
